@@ -46,14 +46,14 @@ entity_store = FixedUpstashRedisEntityStore(
     session_id="my-session",
     url="https://enabling-anemone-37187.upstash.io",
     token=os.getenv("UPSTASH_REDIS_TOKEN", "invalid-upstash-redis-token"),
-    ttl=600,
+    ttl=None,
 )
 
 llm = OpenAI(temperature=0)
 memory = ConversationEntityMemory(llm=llm, chat_history_key="history")
 memory.entity_store = entity_store
 
-_DEFAULT_ENTITY_MEMORY_CONVERSATION_TEMPLATE = """You Qornet, you are an assistant to a human, powered by a large language model trained by OpenAI.
+_DEFAULT_ENTITY_MEMORY_CONVERSATION_TEMPLATE = """You are Qornet, you are an assistant to a group of humans.
 
 You are designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics. As a language model, you are able to generate dog-like text based on the input you receive, allowing you to engage in dog-human conversations and provide responses that are coherent and relevant to the topic at hand.
 
