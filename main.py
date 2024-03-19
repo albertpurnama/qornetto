@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+import traceback
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -80,10 +81,6 @@ async def on_ready():
         name = botUser.name
     print(f'Logged in as {name}')
 
-@bot.event
-async def on_error(event, *args, **kwargs):
-    print(f'An error occurred: {event}')
-
 from langchain.agents import AgentExecutor, create_openai_functions_agent
 from langchain_openai import ChatOpenAI
 from langchain.tools import tool
@@ -124,10 +121,19 @@ async def on_message(message):
 
         rep = agent_executor.invoke({"input": message.content})
 
-        await message.channel.send(rep['output'])
+        try:
+            await message.channel.send(rep['output'])
+        except Exception as e:
+            # log the error trace.
+            traceback.print_exception(type(e), e, e.__traceback__)
+            print("oops, something went wrong when sending the message to message channel");
 
-
-    await bot.process_commands(message)
+    try:
+        await bot.process_commands(message)
+    except Exception as e:
+        # log the error trace.
+        traceback.print_exception(type(e), e, e.__traceback__)
+        print("oops, something went wrong when processing the bot commands");
 
 @bot.command()
 async def hello(ctx):
