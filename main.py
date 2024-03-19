@@ -41,7 +41,6 @@ class FixedUpstashRedisEntityStore(UpstashRedisEntityStore):
 entity_store = FixedUpstashRedisEntityStore(
     session_id="my-session",
     url="https://enabling-anemone-37187.upstash.io",
-    # TODO: move this to env variables
     token=os.getenv("UPSTASH_REDIS_TOKEN", "invalid-upstash-redis-token"),
     ttl=600,
 )
@@ -49,10 +48,6 @@ entity_store = FixedUpstashRedisEntityStore(
 llm = OpenAI(temperature=0)
 memory = ConversationEntityMemory(llm=llm, chat_history_key="history")
 memory.entity_store = entity_store
-
-# from langchain.globals import set_debug
-# set_debug(True)
-
 
 _DEFAULT_ENTITY_MEMORY_CONVERSATION_TEMPLATE = """You Qornet, you are an assistant to a human, powered by a large language model trained by OpenAI.
 
@@ -82,16 +77,13 @@ async def on_ready():
     print(f'Logged in as {name}')
 
 from langchain.agents import AgentExecutor, create_openai_functions_agent
-from langchain_openai import ChatOpenAI
-from langchain.tools import tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, SystemMessagePromptTemplate
+from langchain_community.utilities.wikidata import WikidataAPIWrapper
+from langchain_community.tools.wikidata.tool import WikidataQueryRun
 
-@tool
-def search(query: str) -> str:
-    """Look up things online."""
-    return "LangChain"
+wikidata = WikidataQueryRun(api_wrapper=WikidataAPIWrapper())
 
-tools = [search]
+tools = [wikidata]
 
 # Choose the LLM that will drive the agent
 llm = ChatOpenAI(model="gpt-3.5-turbo-1106")
