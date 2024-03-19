@@ -38,6 +38,10 @@ class FixedUpstashRedisEntityStore(UpstashRedisEntityStore):
       ):
         super().__init__(*args, **kwargs)
 
+    def clear(self):
+        print("[FixedUpstashRedisEntityStore] Clear method called")
+        super().clear()
+
 entity_store = FixedUpstashRedisEntityStore(
     session_id="my-session",
     url="https://enabling-anemone-37187.upstash.io",
