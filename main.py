@@ -84,10 +84,22 @@ from langchain.agents import AgentExecutor, create_openai_functions_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, SystemMessagePromptTemplate
 from langchain_community.utilities.wikidata import WikidataAPIWrapper
 from langchain_community.tools.wikidata.tool import WikidataQueryRun
+from langchain.tools import tool
 
-wikidata = WikidataQueryRun(api_wrapper=WikidataAPIWrapper())
+wikidata = WikidataQueryRun(api_wrapper=WikidataAPIWrapper(), description=(
+    "A wrapper around Wikidata. Do not use when the information is in your memory"
+    "Useful for when you need to answer general questions about unknown"
+    "people, places, companies, facts, historical events, or other subjects. "
+    "Input should be the exact name of the item you want information about "
+    "or a Wikidata QID."
+))
 
-tools = [wikidata]
+@tool
+def multiply(a: int, b: int) -> int:
+    """Multiply two numbers."""
+    return a * b
+
+tools = [multiply, wikidata]
 
 # Choose the LLM that will drive the agent
 llm = ChatOpenAI(model="gpt-3.5-turbo-1106")
