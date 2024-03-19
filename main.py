@@ -107,6 +107,26 @@ agent = create_openai_functions_agent(llm, tools, prompt=chatPromptTemplate)
 
 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, memory=memory)
 
+# send_message sends messsage to discord, but it also handles
+# when the message is long by cutting it into 2000 characters
+# messages. It should break the characters into word
+# level break, rather than a character level break.
+async def send_message(message:str, messageChannel):
+    message_to_process = message
+
+    while len(message_to_process) > 0:
+        if len(message_to_process) > 2000:
+            curr_message = message_to_process[0:2000];
+            curr_message = curr_message.split(' ')
+            poppedString = curr_message.pop()
+            curr_message = ' '.join(curr_message)
+            message_to_process = message_to_process[2000:]
+            message_to_process = poppedString + message_to_process
+            await messageChannel.send(curr_message)
+        else:
+            await messageChannel.send(message_to_process)
+            message_to_process = ""
+
 @bot.event
 async def on_message(message):
     # check the message sender
@@ -122,7 +142,7 @@ async def on_message(message):
         rep = agent_executor.invoke({"input": message.content})
 
         try:
-            await message.channel.send(rep['output'])
+            await send_message(rep['output'], message.channel)
         except Exception as e:
             # log the error trace.
             traceback.print_exception(type(e), e, e.__traceback__)
