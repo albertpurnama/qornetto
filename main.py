@@ -99,7 +99,7 @@ def multiply(a: int, b: int) -> int:
     """Multiply two numbers."""
     return a * b
 
-tools = [multiply, wikidata]
+tools = [multiply]
 
 # Choose the LLM that will drive the agent
 llm = ChatOpenAI(model="gpt-3.5-turbo-1106")
