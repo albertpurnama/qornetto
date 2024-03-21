@@ -102,7 +102,7 @@ def multiply(a: int, b: int) -> int:
 tools = [multiply]
 
 # Choose the LLM that will drive the agent
-llm = ChatOpenAI(model="gpt-3.5-turbo-1106")
+llm = ChatOpenAI(model="gpt-4-1106-preview")
 
 chatPromptTemplate = ChatPromptTemplate.from_messages([
     SystemMessagePromptTemplate(prompt=PromptTemplate(input_variables=["entities", "history"], template=_DEFAULT_ENTITY_MEMORY_CONVERSATION_TEMPLATE)),
