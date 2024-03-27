@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 chat = ChatOpenAI()
 
-userMessageCounter = 2;
+userMessageCounter = 100;
 
 # Import the original class
 from langchain.memory.entity import UpstashRedisEntityStore
@@ -144,7 +144,7 @@ async def on_message(message):
       userMessageCounter = userMessageCounter - 1;
     
     if (bot.user and bot.user.mentioned_in(message)) or userMessageCounter < 1: 
-        userMessageCounter = 2;
+        userMessageCounter = 100;
         # Fetch last 5 messages
 
         rep = agent_executor.invoke({"input": message.content})
