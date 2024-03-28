@@ -70,6 +70,7 @@ Current conversation:
 
 intents = discord.Intents.default()
 intents.messages = True
+intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
@@ -174,8 +175,6 @@ async def on_message(message):
 from discord.ext.voice_recv import extras
 from discord.ext import commands, voice_recv
 from elevenlabs.client import ElevenLabs
-from elevenlabs import play
-import logging
 from io import BytesIO
 from openai import OpenAI as OAI
 import speech_recognition as sr
@@ -206,7 +205,7 @@ async def disconnect(ctx):
     await voice_client.disconnect()
     await ctx.send("Bot disconnected from the voice channel.")
 
-@bot.command()
+@bot.command(name="join", description="Join the voice channel you are in")
 async def join(ctx):
     message_history = [
         {"role": "system", "content": "You are a helpful assistant. Answer concisely."},
