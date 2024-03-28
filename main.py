@@ -137,8 +137,16 @@ async def send_message(message:str, messageChannel):
 
 @bot.event
 async def on_message(message):
-    # check the message sender
-    # if it's coming from Nonuts, do not reduce counter.
+    if message.content.startswith('!'):
+        # Process command instead of going into the executor chain
+        try:
+            await bot.process_commands(message)
+        except Exception as e:
+            # log the error trace.
+            traceback.print_exception(type(e), e, e.__traceback__)
+            print("oops, something went wrong when processing the bot commands");
+        return
+
     if message.author.name != "Nonuts":
       global userMessageCounter
       userMessageCounter = userMessageCounter - 1;
@@ -162,6 +170,106 @@ async def on_message(message):
         # log the error trace.
         traceback.print_exception(type(e), e, e.__traceback__)
         print("oops, something went wrong when processing the bot commands");
+
+from discord.ext.voice_recv import extras
+from discord.ext import commands, voice_recv
+from elevenlabs.client import ElevenLabs
+from elevenlabs import play
+import logging
+from io import BytesIO
+from openai import OpenAI as OAI
+import speech_recognition as sr
+import logging
+
+# logging.basicConfig(level=logging.DEBUG)
+
+client = OAI()
+
+VOICE_ID = "DtsPFCrhbCbbJkwZsb3d"
+XI_API_KEY = os.getenv("XI_API_KEY", "undefined")
+
+xiClient = ElevenLabs(
+    api_key=XI_API_KEY
+)
+
+@bot.command()
+async def disconnect(ctx):
+    if ctx.author.voice is None:
+        await ctx.send("You need to be in a voice channel to use this command.")
+        return
+
+    voice_client = ctx.guild.voice_client
+    if voice_client is None:
+        await ctx.send("The bot is not currently connected to a voice channel.")
+        return
+
+    await voice_client.disconnect()
+    await ctx.send("Bot disconnected from the voice channel.")
+
+@bot.command()
+async def join(ctx):
+    message_history = [
+        {"role": "system", "content": "You are a helpful assistant. Answer concisely."},
+    ]
+    def text_callback(user: discord.User, output: str):
+        print(f'{user} said {output}')
+
+        if not output.lower().startswith("hey there"):
+            return
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=message_history+[
+                {"role": "user", "content": output}
+            ], # type: ignore
+        )
+
+        print(f'ai response: {response.choices[0].message.content or ""}')
+
+        # add to message history
+        message_history.append({"role": "user", "content": output})
+        message_history.append({"role": "assistant", "content": response.choices[0].message.content or ""})
+
+        aiResponse = response.choices[0].message.content or ""
+        
+        asource = BytesIO()
+        if aiResponse is not None:
+            s = xiClient.generate(
+                text=aiResponse,
+                voice=VOICE_ID,
+                model="eleven_turbo_v2",
+                stream=True,
+            )
+
+            for chunk in s:
+                # save it to file
+                asource.write(chunk)
+
+        # send sample audio to voice channel
+        asource.seek(0)
+
+        audio_source = discord.FFmpegPCMAudio(source=asource, pipe=True)
+        vc.play(audio_source)
+
+    def cb(recognizer: sr.Recognizer, audio: sr.AudioData, user: Optional[discord.User]) -> Optional[str]:
+        # log.debug("Got %s, %s, %s", audio, audio.sample_rate, audio.sample_width)
+        # check audio length before sending it to whisper. make sure it's more than 100ms
+        duration_ms = (len(audio.frame_data) / (audio.sample_rate * audio.sample_width)) * 1000
+        if duration_ms < 100:
+            return None
+
+        text: Optional[str] = None
+        try:
+            func = getattr(recognizer, 'recognize_whisper_api')
+            text = func(audio)  # type: ignore
+        except sr.UnknownValueError:
+            pass
+            # self._debug_audio_chunk(audio)
+        return text
+
+    sink = extras.SpeechRecognitionSink(process_cb=cb, text_cb=text_callback) #type: ignore
+    vc = await ctx.author.voice.channel.connect(cls=voice_recv.VoiceRecvClient)
+    vc.listen(sink)
 
 @bot.command()
 async def hello(ctx):
