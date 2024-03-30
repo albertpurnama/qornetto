@@ -1,3 +1,4 @@
+import logging
 import discord
 from discord.ext import commands
 import traceback
@@ -180,50 +181,86 @@ from openai import OpenAI as OAI
 import speech_recognition as sr
 import logging
 
-# logging.basicConfig(level=logging.DEBUG)
-
-client = OAI()
+log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 VOICE_ID = "DtsPFCrhbCbbJkwZsb3d"
 XI_API_KEY = os.getenv("XI_API_KEY", "undefined")
 
-xiClient = ElevenLabs(
-    api_key=XI_API_KEY
-)
+def getConfigFromGuildId(guild_id: int):
+    config = redis.get(str(guild_id))
+    if config is None:
+        return None
+    return json.loads(config)
 
-@bot.command()
-async def disconnect(ctx):
-    if ctx.author.voice is None:
-        await ctx.send("You need to be in a voice channel to use this command.")
+
+@bot.command(name="dc", description="Disconnect the bot from the voice channel it is in")
+async def disconnect(ctx: commands.Context):
+    author = ctx.author
+    # if author is an instance of discord.User
+    if isinstance(author, discord.User):
+        await ctx.send("You need to be in a discord server to use the disconnect functionality")
         return
 
-    voice_client = ctx.guild.voice_client
+    if author.voice is None:
+        await ctx.send("You need to be in a voice channel to use this command.")
+        return
+    
+    guild = ctx.guild
+    if guild is None:
+        await ctx.send("You need to be in a discord server to use the disconnect functionality")
+        return
+
+    voice_client = guild.voice_client
     if voice_client is None:
         await ctx.send("The bot is not currently connected to a voice channel.")
         return
 
-    await voice_client.disconnect()
+    await voice_client.disconnect(force=True)
     await ctx.send("Bot disconnected from the voice channel.")
 
 @bot.command(name="join", description="Join the voice channel you are in")
-async def join(ctx):
+async def join(ctx: commands.Context):
+    guild = ctx.guild
+    if guild is None:
+        await ctx.send("You need to be in a discord server to use the join functionality")
+        return
+    
+    guild_id = guild.id
+    log.info("currently in ", guild.name, "with member: ", guild.approximate_member_count)
+    if guild_id is None:
+        await ctx.send("You need to be in a discord server to use the join functionality")
+        return
+    
+    config = getConfigFromGuildId(guild_id)
+    if config is None:
+        await ctx.send("Invalid configuration. You need to configure me using /setup command before using this command")
+        return
+
+    xiApiKey = config["XI_API_KEY"]
+    xiClient = ElevenLabs(
+        api_key=xiApiKey
+    )
+    
+    oaiClient = OAI(api_key=config["OPENAI_API_KEY"])
+
     message_history = [
         {"role": "system", "content": "You are a helpful assistant. Answer concisely."},
     ]
     def text_callback(user: discord.User, output: str):
-        print(f'{user} said {output}')
+        log.info(f'{user} said {output}')
 
         if not output.lower().startswith("hey there"):
             return
 
-        response = client.chat.completions.create(
+        response = oaiClient.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=message_history+[
                 {"role": "user", "content": output}
             ], # type: ignore
         )
 
-        print(f'ai response: {response.choices[0].message.content or ""}')
+        log.info(f'ai response: {response.choices[0].message.content or ""}')
 
         # add to message history
         message_history.append({"role": "user", "content": output})
@@ -235,7 +272,7 @@ async def join(ctx):
         if aiResponse is not None:
             s = xiClient.generate(
                 text=aiResponse,
-                voice=VOICE_ID,
+                voice=config["XI_VOICE_ID"],
                 model="eleven_turbo_v2",
                 stream=True,
             )
@@ -267,8 +304,71 @@ async def join(ctx):
         return text
 
     sink = extras.SpeechRecognitionSink(process_cb=cb, text_cb=text_callback) #type: ignore
-    vc = await ctx.author.voice.channel.connect(cls=voice_recv.VoiceRecvClient)
+
+    author = ctx.author
+    # if author is an instance of discord.User
+    if isinstance(author, discord.User):
+        await ctx.send("You need to be in a discord server to use the disconnect functionality")
+        return
+
+    if author.voice is None:
+        await ctx.send("You need to be in a voice channel to use this command.")
+        return
+    
+    member_voice_channel = author.voice.channel
+    if member_voice_channel is None:
+        await ctx.send("You need to be in a voice channel to use me!")
+        return
+
+    vc = await member_voice_channel.connect(cls=voice_recv.VoiceRecvClient)
     vc.listen(sink)
+
+# *******************************************************************
+# SETUP AND VERIFY COMMANDS
+# *******************************************************************
+
+# connect to upstash redis
+from upstash_redis import Redis
+import json
+
+redis = Redis(url="https://usw1-perfect-phoenix-34606.upstash.io", token=os.getenv("UPSTASH_REDIS_GUILD_CONFIG_TOKEN", "invalid-upstash-redis-token"))
+
+@bot.command()
+async def verify_setup(ctx: commands.Context):
+    await ctx.send("Verifying setup")
+    
+    guild = ctx.guild
+    if guild is None:
+        await ctx.send("You need to be in a discord server to use the join functionality")
+        return
+    
+    guild_id = guild.id
+    log.info(f"currently in {guild.name} (#{guild_id}), with total member: {guild.approximate_member_count}")
+    if guild_id is None:
+        await ctx.send("You need to be in a discord server to use the join functionality")
+        return
+    
+    config = redis.get(str(guild_id))
+    if config is None:
+        await ctx.send("You need to set it up using /setup command")
+        return
+
+    # parse config string as json dict
+    config = json.loads(config)
+    
+    if config.get("XI_API_KEY") is None:
+        await ctx.send("You need to set elevenLabs API Key. Set it up using /setup command")
+        return
+
+    if config.get("OPENAI_API_KEY") is None:
+        await ctx.send("You need to set openai key, set it up using /setup command")
+        return
+
+    await ctx.send("Your account is setup correctly!")
+
+@bot.command()
+async def setup(ctx: commands.Context):
+    await ctx.send("Setting up")
 
 @bot.command()
 async def hello(ctx):
