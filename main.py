@@ -306,7 +306,7 @@ async def join(ctx: commands.Context):
         text: Optional[str] = None
         try:
             func = getattr(recognizer, 'recognize_whisper_api')
-            text = func(audio, key=config['OPENAI_API_KEY'])  # type: ignore
+            text = func(audio, api_key=config['OPENAI_API_KEY'])  # type: ignore
         except sr.UnknownValueError:
             pass
             # self._debug_audio_chunk(audio)
