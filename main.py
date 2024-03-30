@@ -15,8 +15,6 @@ from langchain.memory.entity import UpstashRedisEntityStore
 from langchain_core.prompts.prompt import PromptTemplate
 from typing import Any, Optional
 
-chat = ChatOpenAI()
-
 userMessageCounter = 100;
 
 # Import the original class
@@ -49,10 +47,6 @@ entity_store = FixedUpstashRedisEntityStore(
     token=os.getenv("UPSTASH_REDIS_TOKEN", "invalid-upstash-redis-token"),
     ttl=None,
 )
-
-llm = OpenAI(temperature=0)
-memory = ConversationEntityMemory(llm=llm, chat_history_key="history")
-memory.entity_store = entity_store
 
 _DEFAULT_ENTITY_MEMORY_CONVERSATION_TEMPLATE = """You are Qornet, you are an assistant to a group of humans.
 
@@ -161,6 +155,10 @@ async def on_message(message: discord.Message):
 
     # Construct the OpenAI Functions agent
     agent = create_openai_functions_agent(llm, tools, prompt=chatPromptTemplate)
+
+    llm = OpenAI(temperature=0, api_key=config["OPENAI_API_KEY"])
+    memory = ConversationEntityMemory(llm=llm, chat_history_key="history")
+    memory.entity_store = entity_store
 
     agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, memory=memory)
 
