@@ -76,7 +76,6 @@ async def on_ready():
         name = botUser.name
     print(f'Logged in as {name}')
 
-
 # send_message sends messsage to discord, but it also handles
 # when the message is long by cutting it into 2000 characters
 # messages. It should break the characters into word
@@ -195,7 +194,7 @@ import speech_recognition as sr
 import logging
 
 log = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 
 def getConfigFromGuildId(guild_id: int):
     config = redis.get(str(guild_id))
