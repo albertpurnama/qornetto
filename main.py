@@ -82,40 +82,6 @@ async def on_ready():
         name = botUser.name
     print(f'Logged in as {name}')
 
-from langchain.agents import AgentExecutor, create_openai_functions_agent
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, SystemMessagePromptTemplate
-from langchain_community.utilities.wikidata import WikidataAPIWrapper
-from langchain_community.tools.wikidata.tool import WikidataQueryRun
-from langchain.tools import tool
-
-wikidata = WikidataQueryRun(api_wrapper=WikidataAPIWrapper(), description=(
-    "A wrapper around Wikidata. Do not use when the information is in your memory"
-    "Useful for when you need to answer general questions about unknown"
-    "people, places, companies, facts, historical events, or other subjects. "
-    "Input should be the exact name of the item you want information about "
-    "or a Wikidata QID."
-))
-
-@tool
-def multiply(a: int, b: int) -> int:
-    """Multiply two numbers."""
-    return a * b
-
-tools = [multiply]
-
-# Choose the LLM that will drive the agent
-llm = ChatOpenAI(model="gpt-4-1106-preview")
-
-chatPromptTemplate = ChatPromptTemplate.from_messages([
-    SystemMessagePromptTemplate(prompt=PromptTemplate(input_variables=["entities", "history"], template=_DEFAULT_ENTITY_MEMORY_CONVERSATION_TEMPLATE)),
-    HumanMessagePromptTemplate(prompt=PromptTemplate(input_variables=['input'], template='{input}')),
-    MessagesPlaceholder(variable_name='agent_scratchpad'),
-])
-
-# Construct the OpenAI Functions agent
-agent = create_openai_functions_agent(llm, tools, prompt=chatPromptTemplate)
-
-agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, memory=memory)
 
 # send_message sends messsage to discord, but it also handles
 # when the message is long by cutting it into 2000 characters
@@ -138,7 +104,7 @@ async def send_message(message:str, messageChannel):
             message_to_process = ""
 
 @bot.event
-async def on_message(message):
+async def on_message(message: discord.Message):
     if message.content.startswith('!'):
         # Process command instead of going into the executor chain
         try:
@@ -148,6 +114,55 @@ async def on_message(message):
             traceback.print_exception(type(e), e, e.__traceback__)
             print("oops, something went wrong when processing the bot commands");
         return
+    
+    guild = message.guild
+    if guild is None:
+        await message.channel.send("You need to be in a discord server to use the join functionality")
+        return
+    
+    guild_id = guild.id
+    log.info("currently in ", guild.name, "with member: ", guild.approximate_member_count)
+
+    config = getConfigFromGuildId(guild_id)
+    if config is None:
+        # TODO: this might be invoked from DM. how to handle this?
+        await message.channel.send("Invalid configuration. You need to configure me using /setup command before using this command")
+        return
+
+    from langchain.agents import AgentExecutor, create_openai_functions_agent
+    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, SystemMessagePromptTemplate
+    from langchain_community.utilities.wikidata import WikidataAPIWrapper
+    from langchain_community.tools.wikidata.tool import WikidataQueryRun
+    from langchain.tools import tool
+
+    wikidata = WikidataQueryRun(api_wrapper=WikidataAPIWrapper(), description=(
+        "A wrapper around Wikidata. Do not use when the information is in your memory"
+        "Useful for when you need to answer general questions about unknown"
+        "people, places, companies, facts, historical events, or other subjects. "
+        "Input should be the exact name of the item you want information about "
+        "or a Wikidata QID."
+    ))
+
+    @tool
+    def multiply(a: int, b: int) -> int:
+        """Multiply two numbers."""
+        return a * b
+
+    tools = [multiply]
+
+    # Choose the LLM that will drive the agent
+    llm = ChatOpenAI(model="gpt-4-1106-preview", api_key=config["OPENAI_API_KEY"])
+
+    chatPromptTemplate = ChatPromptTemplate.from_messages([
+        SystemMessagePromptTemplate(prompt=PromptTemplate(input_variables=["entities", "history"], template=_DEFAULT_ENTITY_MEMORY_CONVERSATION_TEMPLATE)),
+        HumanMessagePromptTemplate(prompt=PromptTemplate(input_variables=['input'], template='{input}')),
+        MessagesPlaceholder(variable_name='agent_scratchpad'),
+    ])
+
+    # Construct the OpenAI Functions agent
+    agent = create_openai_functions_agent(llm, tools, prompt=chatPromptTemplate)
+
+    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, memory=memory)
 
     if message.author.name != "Nonuts":
       global userMessageCounter
@@ -183,9 +198,6 @@ import logging
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
-VOICE_ID = "DtsPFCrhbCbbJkwZsb3d"
-XI_API_KEY = os.getenv("XI_API_KEY", "undefined")
 
 def getConfigFromGuildId(guild_id: int):
     config = redis.get(str(guild_id))
