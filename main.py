@@ -84,11 +84,11 @@ class MyClient(discord.Client):
     # In this basic example, we just synchronize the app commands to one guild.
     # Instead of specifying a guild to every command, we copy over our global commands instead.
     # By doing so, we don't have to wait up to an hour until they are shown to the end-user.
-    async def setup_hook(self):
-        # This copies the global commands over to your guild.
-        # self.tree.copy_global_to()
-        syncedCommands = await self.tree.sync()
-        print(f"Synced {len(syncedCommands)} commands")
+    # async def setup_hook(self):
+    #     # This copies the global commands over to your guild.
+    #     self.tree.copy_global_to(guild=MY_GUILD)
+    #     syncedCommands = await self.tree.sync(guild=MY_GUILD)
+    #     print(f"Synced {len(syncedCommands)} commands")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -116,6 +116,12 @@ import psycopg2
 
 @client.event
 async def on_message(message: discord.Message):
+    # TODO: maybe use debug tool Jishaku instead of
+    # triggering sync through message
+    if message.content == "!sync_nonuts_global_commands":
+        await client.tree.sync()
+        return
+
     if message.author.bot:
         return
     
