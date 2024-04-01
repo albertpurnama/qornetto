@@ -105,7 +105,6 @@ async def on_ready():
 
 import psycopg2
 
-conn = psycopg2.connect(os.getenv('DATABASE_DSN'))
 
 @client.event
 async def on_message(message: discord.Message):
@@ -123,6 +122,9 @@ async def on_message(message: discord.Message):
     if str(message.channel.id) not in (config.on_message_channel_ids or []):
         # ignore messages not coming from the user.
         return
+    
+
+    conn = psycopg2.connect(os.getenv('DATABASE_DSN'))
     
     # rolling window of up to 100 last messages until max context of 10000 characters.
     cursor = conn.cursor()
@@ -208,6 +210,7 @@ async def on_message(message: discord.Message):
         # cleanup
         conn.commit()
         cursor.close()
+    conn.close()
 
 @app_commands.command(name="ask", description="Ask Nonuts to do something")
 @app_commands.describe(message="Your question for Nonut")
