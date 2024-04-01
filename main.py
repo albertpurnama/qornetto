@@ -1,5 +1,6 @@
 import logging
 import discord
+from discord import app_commands
 from discord.ext import commands
 import traceback
 
@@ -10,7 +11,7 @@ import os
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", 'invalid_token')
 
 from langchain_openai import ChatOpenAI, OpenAI
-from langchain.memory import ConversationEntityMemory, UpstashRedisChatMessageHistory
+from langchain.memory import ConversationEntityMemory
 from langchain.memory.entity import UpstashRedisEntityStore
 from langchain_core.prompts.prompt import PromptTemplate
 from typing import Any, Optional
@@ -68,58 +69,59 @@ intents.messages = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-@bot.event
+TEST_GUILD=discord.Object(1162069309766508564)
+MY_GUILD=discord.Object(id=1162069309766508564)  # replace with your guild id
+
+class MyClient(discord.Client):
+    def __init__(self, *, intents: discord.Intents):
+        super().__init__(intents=intents)
+        # A CommandTree is a special type that holds all the application command
+        # state required to make it work. This is a separate class because it
+        # allows all the extra state to be opt-in.
+        # Whenever you want to work with application commands, your tree is used
+        # to store and work with them.
+        # Note: When using commands.Bot instead of discord.Client, the bot will
+        # maintain its own tree instead.
+        self.tree = app_commands.CommandTree(self)
+
+    # In this basic example, we just synchronize the app commands to one guild.
+    # Instead of specifying a guild to every command, we copy over our global commands instead.
+    # By doing so, we don't have to wait up to an hour until they are shown to the end-user.
+    async def setup_hook(self):
+        # This copies the global commands over to your guild.
+        self.tree.copy_global_to(guild=MY_GUILD)
+        await self.tree.sync(guild=MY_GUILD)
+
+intents = discord.Intents.default()
+client = MyClient(intents=intents)
+
+@client.event
 async def on_ready():
-    botUser = bot.user
-    name = 'UnknownBot'
-    if botUser is not None:
-        name = botUser.name
-    print(f'Logged in as {name}')
-
-# send_message sends messsage to discord, but it also handles
-# when the message is long by cutting it into 2000 characters
-# messages. It should break the characters into word
-# level break, rather than a character level break.
-async def send_message(message:str, messageChannel):
-    message_to_process = message
-
-    while len(message_to_process) > 0:
-        if len(message_to_process) > 2000:
-            curr_message = message_to_process[0:2000];
-            curr_message = curr_message.split(' ')
-            poppedString = curr_message.pop()
-            curr_message = ' '.join(curr_message)
-            message_to_process = message_to_process[2000:]
-            message_to_process = poppedString + message_to_process
-            await messageChannel.send(curr_message)
-        else:
-            await messageChannel.send(message_to_process)
-            message_to_process = ""
-
-@bot.event
-async def on_message(message: discord.Message):
-    if message.content.startswith('!'):
-        # Process command instead of going into the executor chain
-        try:
-            await bot.process_commands(message)
-        except Exception as e:
-            # log the error trace.
-            traceback.print_exception(type(e), e, e.__traceback__)
-            print("oops, something went wrong when processing the bot commands");
+    user = client.user
+    if user is None:
+        print("User is None")
         return
-    
-    guild = message.guild
-    if guild is None:
-        await message.channel.send("You need to be in a discord server to use the join functionality")
+    print(f'Logged in as {user} (ID: {user.id})')
+    print('------')
+
+
+@client.tree.command(name="ask", description="Ask Nonuts to do something")
+@app_commands.describe(message="Your question for Nonut")
+async def ask(interaction: discord.Interaction, message: str):
+    await interaction.response.send_message("Sorry, I'm not ready to answer this yet. Maybe tomorrow?")
+    return
+
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("You need to be in a discord server to use the /ask")
         return
-    
-    guild_id = guild.id
-    log.info("currently in ", guild.name, "with member: ", guild.approximate_member_count)
+
+    log.info("currently in guild_id:", str(guild_id))
 
     config = getConfigFromGuildId(guild_id)
     if config is None:
         # TODO: this might be invoked from DM. how to handle this?
-        await message.channel.send("Invalid configuration. You need to configure me using /setup command before using this command")
+        await interaction.response.send_message("Invalid configuration. You need to configure me using /setup command before using this command")
         return
 
     from langchain.agents import AgentExecutor, create_openai_functions_agent
@@ -161,29 +163,15 @@ async def on_message(message: discord.Message):
 
     agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, memory=memory)
 
-    if message.author.name != "Nonuts":
-      global userMessageCounter
-      userMessageCounter = userMessageCounter - 1;
-    
-    if (bot.user and bot.user.mentioned_in(message)) or userMessageCounter < 1: 
-        userMessageCounter = 100;
-        # Fetch last 5 messages
-
-        rep = agent_executor.invoke({"input": message.content})
-
-        try:
-            await send_message(rep['output'], message.channel)
-        except Exception as e:
-            # log the error trace.
-            traceback.print_exception(type(e), e, e.__traceback__)
-            print("oops, something went wrong when sending the message to message channel");
+    rep = agent_executor.invoke({"input": message})
 
     try:
-        await bot.process_commands(message)
+        await interaction.response.send_message(rep["output"])
+        # await send_message(rep['output'], message.channel)
     except Exception as e:
         # log the error trace.
         traceback.print_exception(type(e), e, e.__traceback__)
-        print("oops, something went wrong when processing the bot commands");
+        print("oops, something went wrong when sending the message to message channel");
 
 from discord.ext.voice_recv import extras
 from discord.ext import commands, voice_recv
@@ -194,7 +182,7 @@ import speech_recognition as sr
 import logging
 
 log = logging.getLogger(__name__)
-# logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 def getConfigFromGuildId(guild_id: int):
     config = redis.get(str(guild_id))
@@ -203,47 +191,42 @@ def getConfigFromGuildId(guild_id: int):
     return json.loads(config)
 
 
-@bot.command(name="dc", description="Disconnect the bot from the voice channel it is in")
-async def disconnect(ctx: commands.Context):
-    author = ctx.author
+@client.tree.command(name="dc", description="Disconnect the bot from the voice channel it is in")
+async def disconnect(ctx: discord.Interaction):
+    author = ctx.user
     # if author is an instance of discord.User
     if isinstance(author, discord.User):
-        await ctx.send("You need to be in a discord server to use the disconnect functionality")
+        await ctx.response.send_message("You need to be in a discord server to use the disconnect functionality")
         return
 
     if author.voice is None:
-        await ctx.send("You need to be in a voice channel to use this command.")
+        await ctx.response.send_message("You need to be in a voice channel to use this command.")
         return
     
     guild = ctx.guild
     if guild is None:
-        await ctx.send("You need to be in a discord server to use the disconnect functionality")
+        await ctx.response.send_message("You need to be in a discord server to use the disconnect functionality")
         return
 
     voice_client = guild.voice_client
     if voice_client is None:
-        await ctx.send("The bot is not currently connected to a voice channel.")
+        await ctx.response.send_message("The bot is not currently connected to a voice channel.")
         return
 
     await voice_client.disconnect(force=True)
-    await ctx.send("Bot disconnected from the voice channel.")
+    await ctx.response.send_message("Bot disconnected from the voice channel.")
 
-@bot.command(name="join", description="Join the voice channel you are in")
-async def join(ctx: commands.Context):
-    guild = ctx.guild
-    if guild is None:
-        await ctx.send("You need to be in a discord server to use the join functionality")
-        return
-    
-    guild_id = guild.id
-    log.info("currently in ", guild.name, "with member: ", guild.approximate_member_count)
+@client.tree.command(name="join", description="Join the voice channel you are in")
+async def join(ctx: discord.Interaction):
+    guild_id = ctx.guild_id
+    log.info("currently in guild_id:", guild_id)
     if guild_id is None:
-        await ctx.send("You need to be in a discord server to use the join functionality")
+        await ctx.response.send_message("You need to be in a discord server to use the join functionality")
         return
     
     config = getConfigFromGuildId(guild_id)
     if config is None:
-        await ctx.send("Invalid configuration. You need to configure me using /setup command before using this command")
+        await ctx.response.send_message("Invalid configuration. You need to configure me using /setup command before using this command")
         return
 
     xiApiKey = config["XI_API_KEY"]
@@ -314,19 +297,19 @@ async def join(ctx: commands.Context):
 
     sink = extras.SpeechRecognitionSink(process_cb=cb, text_cb=text_callback) #type: ignore
 
-    author = ctx.author
+    author = ctx.user
     # if author is an instance of discord.User
     if isinstance(author, discord.User):
-        await ctx.send("You need to be in a discord server to use the disconnect functionality")
+        await ctx.response.send_message("You need to be in a discord server to use the disconnect functionality")
         return
 
     if author.voice is None:
-        await ctx.send("You need to be in a voice channel to use this command.")
+        await ctx.response.send_message("You need to be in a voice channel to use this command.")
         return
     
     member_voice_channel = author.voice.channel
     if member_voice_channel is None:
-        await ctx.send("You need to be in a voice channel to use me!")
+        await ctx.response.send_message("You need to be in a voice channel to use me!")
         return
 
     vc = await member_voice_channel.connect(cls=voice_recv.VoiceRecvClient)
@@ -339,48 +322,47 @@ async def join(ctx: commands.Context):
 # connect to upstash redis
 from upstash_redis import Redis
 import json
+from ui.key_setup import KeySetup
 
 redis = Redis(url="https://usw1-perfect-phoenix-34606.upstash.io", token=os.getenv("UPSTASH_REDIS_GUILD_CONFIG_TOKEN", "invalid-upstash-redis-token"))
 
-@bot.command()
-async def verify_setup(ctx: commands.Context):
-    await ctx.send("Verifying setup")
-    
+@client.tree.command()
+async def verify_setup(ctx: discord.Interaction):
     guild = ctx.guild
     if guild is None:
-        await ctx.send("You need to be in a discord server to use the join functionality")
+        await ctx.response.send_message("You need to be in a discord server to use the join functionality")
         return
     
     guild_id = guild.id
     log.info(f"currently in {guild.name} (#{guild_id}), with total member: {guild.approximate_member_count}")
     if guild_id is None:
-        await ctx.send("You need to be in a discord server to use the join functionality")
+        await ctx.response.send_message("You need to be in a discord server to use the join functionality")
         return
     
     config = redis.get(str(guild_id))
     if config is None:
-        await ctx.send("You need to set it up using /setup command")
+        await ctx.response.send_message("You need to set it up using /setup command")
         return
 
     # parse config string as json dict
     config = json.loads(config)
     
     if config.get("XI_API_KEY") is None:
-        await ctx.send("You need to set elevenLabs API Key. Set it up using /setup command")
+        await ctx.response.send_message("You need to set elevenLabs API Key. Set it up using /setup command")
         return
 
     if config.get("OPENAI_API_KEY") is None:
-        await ctx.send("You need to set openai key, set it up using /setup command")
+        await ctx.response.send_message("You need to set openai key, set it up using /setup command")
         return
 
-    await ctx.send("Your account is setup correctly!")
+    await ctx.response.send_message("Your account is setup correctly!")
 
-@bot.command()
-async def setup(ctx: commands.Context):
-    await ctx.send("Setting up")
+@client.tree.command()
+async def setup(ctx: discord.Interaction):
+    await ctx.response.send_modal(KeySetup(redis=redis))
 
-@bot.command()
+@client.tree.command()
 async def hello(ctx):
     await ctx.send(f"Hello, {ctx.author.mention}!")
 
-bot.run(BOT_TOKEN)
+client.run(BOT_TOKEN)
