@@ -223,7 +223,7 @@ async def ask(interaction: discord.Interaction, message: str):
         await interaction.response.send_message("You need to be in a discord server to use the /ask")
         return
 
-    log.info("currently in guild_id:", str(guild_id))
+    log.info(f"currently in guild_id: {guild_id}")
 
     config = getConfigFromGuildId(guild_id)
     if config is None:
@@ -326,7 +326,7 @@ async def disconnect(ctx: discord.Interaction):
 @client.tree.command(name="join", description="Join the voice channel you are in")
 async def join(ctx: discord.Interaction):
     guild_id = ctx.guild_id
-    log.info("currently in guild_id:", guild_id)
+    log.info(f"currently in guild_id: {guild_id}")
     if guild_id is None:
         await ctx.response.send_message("You need to be in a discord server to use the join functionality")
         return
