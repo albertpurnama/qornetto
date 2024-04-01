@@ -35,7 +35,7 @@ class ServerBotConfig:
     return ServerBotConfig(
       openai_api_key=openai_api_key,
       xi_api_key=xi_api_key,
-      xi_voice_id=jsonData.get("XI_VOICE_ID"),
+      xi_voice_id=jsonData.get("XI_VOICE_ID") or os.getenv("XI_VOICE_ID"),
       on_message_channel_ids=jsonData.get("on_message_channel_ids")
     )
   

@@ -314,16 +314,6 @@ def getConfigFromGuildId(guild_id: int) -> ServerBotConfig | None:
 
 @client.tree.command(name="dc", description="Disconnect the bot from the voice channel it is in")
 async def disconnect(ctx: discord.Interaction):
-    author = ctx.user
-    # if author is an instance of discord.User
-    if isinstance(author, discord.User):
-        await ctx.response.send_message("You need to be in a discord server to use the disconnect functionality")
-        return
-
-    if author.voice is None:
-        await ctx.response.send_message("You need to be in a voice channel to use this command.")
-        return
-    
     guild = ctx.guild
     if guild is None:
         await ctx.response.send_message("You need to be in a discord server to use the disconnect functionality")
@@ -383,6 +373,9 @@ async def join(ctx: discord.Interaction):
         
         asource = BytesIO()
         if aiResponse is not None:
+            if config is None:
+                ctx.channel.send("Configuration not found")
+                return
             s = xiClient.generate(
                 text=aiResponse,
                 voice=(config.xi_voice_id or 'None'), # type: ignore
@@ -418,25 +411,16 @@ async def join(ctx: discord.Interaction):
 
     sink = extras.SpeechRecognitionSink(process_cb=cb, text_cb=text_callback) #type: ignore
 
-    author = ctx.user
-    # if author is an instance of discord.User
-    if isinstance(author, discord.User):
-        await ctx.response.send_message("You need to be in a discord server to use the disconnect functionality")
+    # check if the current channel is voice channel
+    currentVoiceChannel = ctx.channel
+    if not isinstance(currentVoiceChannel, discord.VoiceChannel):
+        await ctx.response.send_message("This command can only be used in a voice channel.")
         return
 
-    if author.voice is None:
-        await ctx.response.send_message("You need to be in a voice channel to use this command.")
-        return
-    
-    member_voice_channel = author.voice.channel
-    if member_voice_channel is None:
-        await ctx.response.send_message("You need to be in a voice channel to use me!")
-        return
-
-    vc = await member_voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+    vc = await currentVoiceChannel.connect(cls=voice_recv.VoiceRecvClient)
     vc.listen(sink)
+    await ctx.response.send_message("Listening in this channel now")
 
-# *******************************************************************
 # SETUP AND VERIFY COMMANDS
 # *******************************************************************
 
