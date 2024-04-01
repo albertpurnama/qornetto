@@ -12,7 +12,6 @@ dataclasses-json==0.6.4
 decorator==5.1.1
 discord==2.3.2
 discord-ext-voice-recv==0.4.2a145
-discord.py[voice]
 discord.py @ git+https://github.com/Rapptz/discord.py.git@425edd2e10b9be3d7799c0df0cd1d43a1a34654e
 distro==1.9.0
 elevenlabs==1.0.2
@@ -45,6 +44,7 @@ packaging==23.2
 parso==0.8.3
 pexpect==4.9.0
 prompt-toolkit==3.0.43
+psycopg2==2.9.9
 ptyprocess==0.7.0
 pure-eval==0.2.2
 pycparser==2.21
