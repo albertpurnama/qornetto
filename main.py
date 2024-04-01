@@ -303,7 +303,7 @@ logging.basicConfig(level=logging.INFO)
 def getConfigFromGuildId(guild_id: int) -> ServerBotConfig | None:
     config = redis.get(str(guild_id))
     if config is None:
-        return None
+        return ServerBotConfig.from_json({}) # return default config (using hosted OpenAI API key)
     return ServerBotConfig.from_json(json.loads(config))
 
 @client.tree.command(name="dc", description="Disconnect the bot from the voice channel it is in")
