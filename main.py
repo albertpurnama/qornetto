@@ -86,13 +86,20 @@ class MyClient(discord.Client):
     # By doing so, we don't have to wait up to an hour until they are shown to the end-user.
     async def setup_hook(self):
         # This copies the global commands over to your guild.
-        self.tree.copy_global_to(guild=MY_GUILD)
-        await self.tree.sync(guild=MY_GUILD)
+        # self.tree.copy_global_to()
+        await self.tree.sync()
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.messages = True
 client = MyClient(intents=intents)
+
+@client.tree.command(name="sync", description="Sync the bot's commands to the server")
+@app_commands.guild_only()
+async def sync(interaction: discord.Interaction):
+    await interaction.response.send_message("Syncing commands...")
+    await client.tree.sync(guild=discord.Object(id=interaction.guild_id)) # type: ignore
+    await interaction.response.send_message("Commands synced.")
 
 @client.event
 async def on_ready():
