@@ -16,8 +16,6 @@ from langchain.memory.entity import UpstashRedisEntityStore
 from langchain_core.prompts.prompt import PromptTemplate
 from typing import Any, Optional
 
-userMessageCounter = 100;
-
 # Import the original class
 from langchain.memory.entity import UpstashRedisEntityStore
 
@@ -69,7 +67,6 @@ intents.messages = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-TEST_GUILD=discord.Object(1162069309766508564)
 MY_GUILD=discord.Object(id=1162069309766508564)  # replace with your guild id
 
 class MyClient(discord.Client):
@@ -93,6 +90,8 @@ class MyClient(discord.Client):
         await self.tree.sync(guild=MY_GUILD)
 
 intents = discord.Intents.default()
+intents.message_content = True
+intents.messages = True
 client = MyClient(intents=intents)
 
 @client.event
@@ -104,8 +103,113 @@ async def on_ready():
     print(f'Logged in as {user} (ID: {user.id})')
     print('------')
 
+import psycopg2
 
-@client.tree.command(name="ask", description="Ask Nonuts to do something")
+conn = psycopg2.connect(os.getenv('DATABASE_DSN'))
+
+@client.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+    
+    if message.guild is None:
+        # we're ignoring DMs for now.
+        return
+
+    config = getConfigFromGuildId(message.guild.id)
+    if config is None:
+        return
+
+    if str(message.channel.id) not in (config.on_message_channel_ids or []):
+        # ignore messages not coming from the user.
+        return
+    
+    # rolling window of up to 100 last messages until max context of 10000 characters.
+    cursor = conn.cursor()
+    cursor.execute("SELECT messages FROM discord_ai_user_conversation WHERE guild_id = %s AND channel_id = %s", (message.guild.id, message.channel.id))
+    rows = cursor.fetchall()
+    # read the json messages
+    if rows:
+        messages = rows[0][0]
+        # Add the new message to the list of messages
+        messages.append({
+            "author": message.author.name,
+            "bot": message.author.bot,
+            "content": message.content,
+        })
+
+        # Ensure we don't exceed 100 messages or 100k characters total
+        total_chars = sum(len(m["content"]) for m in messages)
+        while len(messages) > 100 or total_chars > 100000:
+            removed_message = messages.pop(0)
+            total_chars -= len(removed_message["content"])
+
+        # Update the database with the new list of messages
+        cursor.execute("UPDATE discord_ai_user_conversation SET messages = %s WHERE guild_id = %s AND channel_id = %s", 
+                    (json.dumps(messages), message.guild.id, message.channel.id))
+        
+        conn.commit()
+    else:
+        # create a new list of messages
+        messages = [{
+            "author": message.author.name,
+            "bot": message.author.bot,
+            "content": message.content
+        }]
+        cursor.execute("INSERT INTO discord_ai_user_conversation (guild_id, channel_id, conversation_start_date, messages) VALUES (%s, %s, %s, %s)", 
+                       (message.guild.id, message.channel.id, message.created_at.isoformat(), json.dumps(messages)))
+        conn.commit()
+    
+    # now that we have the messages, let's create OpenAI 
+    # conversation messages from it.
+    # We need to make sure that the type of messages is
+    # appropriate for OpenAI
+    from openai.types.chat import ChatCompletionMessageParam,ChatCompletionAssistantMessageParam, ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
+
+
+    openai_conversation_messages: list[ChatCompletionMessageParam] = [
+        ChatCompletionSystemMessageParam(role="system", content="You are a helpful assistant living in a discord channel. Answer concisely."),
+    ]
+
+    for m in messages:
+        if m["bot"]:
+            openai_conversation_messages.append(ChatCompletionAssistantMessageParam(role="assistant", content=m.get("content", "")))
+        else:
+            openai_conversation_messages.append(ChatCompletionUserMessageParam(role="user", content=f'{m["author"]}: {m["content"]}'))
+
+    async with message.channel.typing():
+        # pass in the messages to gpt-3.5 openai
+        # Generate the OpenAI conversation
+        try:
+            openaiClient = OAI(api_key=config.openai_api_key)
+            response = openaiClient.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=openai_conversation_messages,
+            )
+            generated_response = response.choices[0].message.content
+
+            # Send the generated response back to the discord channel
+            await message.channel.send(generated_response)
+            
+            # save message to database
+            messages.append({
+                "author": "assistant",
+                "bot": True,
+                "content": generated_response,
+            })
+
+            cursor.execute("UPDATE discord_ai_user_conversation SET messages = %s WHERE guild_id = %s AND channel_id = %s", 
+                        (json.dumps(messages), message.guild.id, message.channel.id))
+
+        except Exception as e:
+            log.error(f"Failed to generate OpenAI conversation: {e}")
+            await message.channel.send("Sorry, I couldn't generate a response. Please try again later.")
+
+        # cleanup
+        conn.commit()
+        cursor.close()
+
+@app_commands.command(name="ask", description="Ask Nonuts to do something")
 @app_commands.describe(message="Your question for Nonut")
 async def ask(interaction: discord.Interaction, message: str):
     await interaction.response.send_message("Sorry, I'm not ready to answer this yet. Maybe tomorrow?")
@@ -180,16 +284,16 @@ from io import BytesIO
 from openai import OpenAI as OAI
 import speech_recognition as sr
 import logging
+from config.config import ServerBotConfig
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-def getConfigFromGuildId(guild_id: int):
+def getConfigFromGuildId(guild_id: int) -> ServerBotConfig | None:
     config = redis.get(str(guild_id))
     if config is None:
         return None
-    return json.loads(config)
-
+    return ServerBotConfig.from_json(json.loads(config))
 
 @client.tree.command(name="dc", description="Disconnect the bot from the voice channel it is in")
 async def disconnect(ctx: discord.Interaction):
@@ -229,12 +333,12 @@ async def join(ctx: discord.Interaction):
         await ctx.response.send_message("Invalid configuration. You need to configure me using /setup command before using this command")
         return
 
-    xiApiKey = config["XI_API_KEY"]
+    xiApiKey = config.xi_api_key
     xiClient = ElevenLabs(
         api_key=xiApiKey
     )
     
-    oaiClient = OAI(api_key=config["OPENAI_API_KEY"])
+    oaiClient = OAI(api_key=config.openai_api_key)
 
     message_history = [
         {"role": "system", "content": "You are a helpful assistant. Answer concisely."},
@@ -264,7 +368,7 @@ async def join(ctx: discord.Interaction):
         if aiResponse is not None:
             s = xiClient.generate(
                 text=aiResponse,
-                voice=config["XI_VOICE_ID"],
+                voice=(config.xi_voice_id or 'None'), # type: ignore
                 model="eleven_turbo_v2",
                 stream=True,
             )
@@ -289,7 +393,7 @@ async def join(ctx: discord.Interaction):
         text: Optional[str] = None
         try:
             func = getattr(recognizer, 'recognize_whisper_api')
-            text = func(audio, api_key=config['OPENAI_API_KEY'])  # type: ignore
+            text = func(audio, api_key=config.openai_api_key)  # type: ignore
         except sr.UnknownValueError:
             pass
             # self._debug_audio_chunk(audio)
@@ -328,31 +432,15 @@ redis = Redis(url="https://usw1-perfect-phoenix-34606.upstash.io", token=os.gete
 
 @client.tree.command()
 async def verify_setup(ctx: discord.Interaction):
-    guild = ctx.guild
-    if guild is None:
-        await ctx.response.send_message("You need to be in a discord server to use the join functionality")
-        return
-    
-    guild_id = guild.id
-    log.info(f"currently in {guild.name} (#{guild_id}), with total member: {guild.approximate_member_count}")
+    guild_id = ctx.guild_id
+    log.info(f"currently in guild#{guild_id})")
     if guild_id is None:
         await ctx.response.send_message("You need to be in a discord server to use the join functionality")
         return
     
-    config = redis.get(str(guild_id))
+    config = getConfigFromGuildId(guild_id)
     if config is None:
-        await ctx.response.send_message("You need to set it up using /setup command")
-        return
-
-    # parse config string as json dict
-    config = json.loads(config)
-    
-    if config.get("XI_API_KEY") is None:
-        await ctx.response.send_message("You need to set elevenLabs API Key. Set it up using /setup command")
-        return
-
-    if config.get("OPENAI_API_KEY") is None:
-        await ctx.response.send_message("You need to set openai key, set it up using /setup command")
+        await ctx.response.send_message("Bot is not configured. You need to set it up using /setup command")
         return
 
     await ctx.response.send_message("Your account is setup correctly!")
@@ -360,6 +448,24 @@ async def verify_setup(ctx: discord.Interaction):
 @client.tree.command()
 async def setup(ctx: discord.Interaction):
     await ctx.response.send_modal(KeySetup(redis=redis))
+
+@client.tree.command()
+@commands.guild_only()
+async def listen(ctx: discord.Interaction):
+    print(f"listen called by {ctx.user} in {ctx.guild_id}")
+    config = getConfigFromGuildId(ctx.guild_id or 0)
+    if config is None:
+        await ctx.response.send_message("Invalid configuration. You need to configure me using /setup command before using this command")
+        return
+    
+    # append current channel to on_message_channel_ids
+    config.on_message_channel_ids = config.on_message_channel_ids or []
+    config.on_message_channel_ids.append(str(ctx.channel_id))
+
+    # save to redis
+    redis.set(str(ctx.guild_id), json.dumps(config.to_dict()))
+
+    await ctx.response.send_message("Listening in this channel now")
 
 @client.tree.command()
 async def hello(ctx):
