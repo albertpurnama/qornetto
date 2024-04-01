@@ -16,6 +16,9 @@ from langchain.memory.entity import UpstashRedisEntityStore
 from langchain_core.prompts.prompt import PromptTemplate
 from typing import Any, Optional
 
+from openai.types.chat import ChatCompletionMessageParam,ChatCompletionAssistantMessageParam, ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
+
+
 # Import the original class
 from langchain.memory.entity import UpstashRedisEntityStore
 
@@ -180,8 +183,6 @@ async def on_message(message: discord.Message):
     # conversation messages from it.
     # We need to make sure that the type of messages is
     # appropriate for OpenAI
-    from openai.types.chat import ChatCompletionMessageParam,ChatCompletionAssistantMessageParam, ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
-
 
     openai_conversation_messages: list[ChatCompletionMessageParam] = [
         ChatCompletionSystemMessageParam(role="system", content="You are a helpful assistant living in a discord channel. Answer concisely."),
@@ -347,34 +348,96 @@ async def join(ctx: discord.Interaction):
     
     oaiClient = OAI(api_key=config.openai_api_key)
 
-    message_history = [
-        {"role": "system", "content": "You are a helpful assistant. Answer concisely."},
+    message_history: list[ChatCompletionMessageParam] = [
+        {"role": "system", "content": "You are a helpful assistant in a discord channel. Answer concisely."},
     ]
+
+
     def text_callback(user: discord.User, output: str):
         log.info(f'{user} said {output}')
 
         if not output.lower().startswith("hey there"):
             return
+    
+        conn = psycopg2.connect(os.getenv('DATABASE_DSN'))
+        
+        # rolling window of up to 100 last messages until max context of 10000 characters.
+        cursor = conn.cursor()
+        cursor.execute("SELECT messages FROM discord_ai_user_conversation WHERE guild_id = %s AND channel_id = %s", (ctx.guild_id, ctx.channel_id))
+        rows = cursor.fetchall()
+        # read the json messages
+        if rows:
+            messages = rows[0][0]
+            # Add the new message to the list of messages
+            messages.append({
+                "author": user.name,
+                "bot": False,
+                "content": output,
+            })
+
+            # Ensure we don't exceed 100 messages or 100k characters total
+            total_chars = sum(len(m["content"]) for m in messages)
+            while len(messages) > 100 or total_chars > 100000:
+                removed_message = messages.pop(0)
+                total_chars -= len(removed_message["content"])
+
+            # Update the database with the new list of messages
+            cursor.execute("UPDATE discord_ai_user_conversation SET messages = %s WHERE guild_id = %s AND channel_id = %s", 
+                        (json.dumps(messages), ctx.guild_id, ctx.channel_id))
+            
+            conn.commit()
+        else:
+            # create a new list of messages
+            messages = [{
+                "author": user.name,
+                "bot": False,
+                "content": output
+            }]
+
+            from datetime import datetime
+
+            cursor.execute("INSERT INTO discord_ai_user_conversation (guild_id, channel_id, conversation_start_date, messages) VALUES (%s, %s, %s, %s)", 
+                        (ctx.guild_id, ctx.channel_id, datetime.now().isoformat(), json.dumps(messages)))
+            conn.commit()
+
+        message_history: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": "You are a helpful assistant in a discord channel. Answer concisely."},
+        ]
+
+        for m in messages:
+            if m["bot"]:
+                message_history.append(ChatCompletionAssistantMessageParam(role="assistant", content=m.get("content", "")))
+            else:
+                message_history.append(ChatCompletionUserMessageParam(role="user", content=f'{m["author"]}: {m["content"]}'))
 
         response = oaiClient.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=message_history+[
+            messages=message_history + [
                 {"role": "user", "content": output}
-            ], # type: ignore
+            ],
         )
 
         log.info(f'ai response: {response.choices[0].message.content or ""}')
 
-        # add to message history
-        message_history.append({"role": "user", "content": output})
-        message_history.append({"role": "assistant", "content": response.choices[0].message.content or ""})
-
         aiResponse = response.choices[0].message.content or ""
-        
+
+        messages.append({
+            "author": "assistant",
+            "bot": True,
+            "content": aiResponse,
+        })
+
+        # save message to db
+        cursor.execute("UPDATE discord_ai_user_conversation SET messages = %s WHERE guild_id = %s AND channel_id = %s", 
+                        (json.dumps(messages), ctx.guild_id, ctx.channel_id))
+        conn.commit()
+        conn.close()
+
         asource = BytesIO()
         if aiResponse is not None:
-            if config is None:
-                ctx.channel.send("Configuration not found")
+            currentChannel = ctx.channel
+            if config is None or not isinstance(currentChannel, discord.VoiceChannel):
+                currentChannel.send("Configuration not found") # type: ignore
                 return
             s = xiClient.generate(
                 text=aiResponse,
