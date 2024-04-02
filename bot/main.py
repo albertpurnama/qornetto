@@ -10,60 +10,9 @@ load_dotenv(override=True)
 import os
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", 'invalid_token')
 
-from langchain_openai import ChatOpenAI, OpenAI
-from langchain.memory import ConversationEntityMemory
-from langchain.memory.entity import UpstashRedisEntityStore
-from langchain_core.prompts.prompt import PromptTemplate
-from typing import Any, Optional
+from typing import  Optional
 
 from openai.types.chat import ChatCompletionMessageParam,ChatCompletionAssistantMessageParam, ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
-
-
-# Import the original class
-from langchain.memory.entity import UpstashRedisEntityStore
-
-# Create a subclass with the necessary fixes
-# This is temporary fix until https://github.com/langchain-ai/langchain/pull/18892
-# is merged.
-class FixedUpstashRedisEntityStore(UpstashRedisEntityStore):
-    redis_client: Any
-    session_id: str = "default"
-    key_prefix: str = "memory_store"
-    ttl: Optional[int] = 60 * 60 * 24
-    recall_ttl: Optional[int] = 60 * 60 * 24 * 3
-
-    def __init__(
-        self,
-        *args: Any,
-        **kwargs: Any,
-      ):
-        super().__init__(*args, **kwargs)
-
-    def clear(self):
-        print("[FixedUpstashRedisEntityStore] Clear method called")
-        super().clear()
-
-entity_store = FixedUpstashRedisEntityStore(
-    session_id="my-session",
-    url=os.getenv("UPSTASH_REDIS_URL", "invalid_redis_url"),
-    token=os.getenv("UPSTASH_REDIS_TOKEN", "invalid-upstash-redis-token"),
-    ttl=None,
-)
-
-_DEFAULT_ENTITY_MEMORY_CONVERSATION_TEMPLATE = """You are Qornet, you are an assistant to a group of humans.
-
-You are designed to be able to assist with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics. As a language model, you are able to generate dog-like text based on the input you receive, allowing you to engage in dog-human conversations and provide responses that are coherent and relevant to the topic at hand.
-
-You are constantly learning and improving, and your capabilities are constantly evolving. You are able to process and understand large amounts of text, and can use this knowledge to provide accurate and informative responses to a wide range of questions. You have access to some personalized information provided by the human in the Context section below. Additionally, you are able to generate your own text based on the input you receive, allowing you to engage in discussions and provide explanations and descriptions on a wide range of topics.
-
-Overall, you are a powerful tool that can help with a wide range of tasks and provide valuable insights and information on a wide range of topics. Whether the human needs help with a specific question or just wants to have a conversation about a particular topic, you are here to assist.
-
-Context:
-{entities}
-
-Current conversation:
-{history}
-"""
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -224,74 +173,6 @@ async def on_message(message: discord.Message):
 
     # cleanup
     session.close()
-
-@app_commands.command(name="ask", description="Ask Nonuts to do something")
-@app_commands.describe(message="Your question for Nonut")
-async def ask(interaction: discord.Interaction, message: str):
-    await interaction.response.send_message("Sorry, I'm not ready to answer this yet. Maybe tomorrow?")
-    return
-
-    guild_id = interaction.guild_id
-    if guild_id is None:
-        await interaction.response.send_message("You need to be in a discord server to use the /ask")
-        return
-
-    log.info(f"currently in guild_id: {guild_id}")
-
-    config = getConfigFromGuildId(guild_id)
-    if config is None:
-        # TODO: this might be invoked from DM. how to handle this?
-        await interaction.response.send_message("Invalid configuration. You need to configure me using /setup command before using this command")
-        return
-
-    from langchain.agents import AgentExecutor, create_openai_functions_agent
-    from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, SystemMessagePromptTemplate
-    from langchain_community.utilities.wikidata import WikidataAPIWrapper
-    from langchain_community.tools.wikidata.tool import WikidataQueryRun
-    from langchain.tools import tool
-
-    wikidata = WikidataQueryRun(api_wrapper=WikidataAPIWrapper(), description=(
-        "A wrapper around Wikidata. Do not use when the information is in your memory"
-        "Useful for when you need to answer general questions about unknown"
-        "people, places, companies, facts, historical events, or other subjects. "
-        "Input should be the exact name of the item you want information about "
-        "or a Wikidata QID."
-    ))
-
-    @tool
-    def multiply(a: int, b: int) -> int:
-        """Multiply two numbers."""
-        return a * b
-
-    tools = [multiply]
-
-    # Choose the LLM that will drive the agent
-    llm = ChatOpenAI(model="gpt-4-1106-preview", api_key=config["OPENAI_API_KEY"])
-
-    chatPromptTemplate = ChatPromptTemplate.from_messages([
-        SystemMessagePromptTemplate(prompt=PromptTemplate(input_variables=["entities", "history"], template=_DEFAULT_ENTITY_MEMORY_CONVERSATION_TEMPLATE)),
-        HumanMessagePromptTemplate(prompt=PromptTemplate(input_variables=['input'], template='{input}')),
-        MessagesPlaceholder(variable_name='agent_scratchpad'),
-    ])
-
-    # Construct the OpenAI Functions agent
-    agent = create_openai_functions_agent(llm, tools, prompt=chatPromptTemplate)
-
-    llm = OpenAI(temperature=0, api_key=config["OPENAI_API_KEY"])
-    memory = ConversationEntityMemory(llm=llm, chat_history_key="history")
-    memory.entity_store = entity_store
-
-    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, memory=memory)
-
-    rep = agent_executor.invoke({"input": message})
-
-    try:
-        await interaction.response.send_message(rep["output"])
-        # await send_message(rep['output'], message.channel)
-    except Exception as e:
-        # log the error trace.
-        traceback.print_exception(type(e), e, e.__traceback__)
-        print("oops, something went wrong when sending the message to message channel");
 
 from discord.ext.voice_recv import extras
 from discord.ext import commands, voice_recv
