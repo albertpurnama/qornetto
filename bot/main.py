@@ -2,8 +2,7 @@ import logging
 import discord
 from discord import app_commands
 from discord.ext import commands
-import traceback
-
+from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
@@ -138,7 +137,7 @@ async def on_message(message: discord.Message):
         if m.get('bot', False) == True:
             openai_conversation_messages.append(ChatCompletionAssistantMessageParam(role="assistant", content=m.get("content", "")))
         else:
-            openai_conversation_messages.append(ChatCompletionUserMessageParam(role="user", content=f'{m.get("author", "someone")}: {m.get("content", "someone")}'))
+            openai_conversation_messages.append(ChatCompletionUserMessageParam(role="user", content=f'{m.get("author", "someone")}: {m.get("content", "something")}'))
 
     async with message.channel.typing():
         # pass in the messages to gpt-3.5 openai
@@ -207,6 +206,46 @@ async def disconnect(ctx: discord.Interaction):
     await voice_client.disconnect(force=True)
     await ctx.response.send_message("Bot disconnected from the voice channel.")
 
+# speech text is a text representation of user speech.
+class SpeechText:
+    user_id: int
+    user_name: str
+    content: str
+
+    def __init__(self, user_id: int, user_name: str, content: str):
+        self.user_id = user_id
+        self.user_name = user_name
+        self.content = content
+
+# on memory conversation
+class ActiveConversations:
+    # conversations is a map from channel_id -> conversation
+    conversations: dict[int, list[SpeechText]] = {}
+
+    def __init__(self):
+        self.conversations = {}
+
+    def add_user_speech(self, channel_id: int, user_speech: SpeechText):
+        if channel_id not in self.conversations:
+            self.conversations[channel_id] = []
+        if self.conversations[channel_id] and self.conversations[channel_id][-1].user_id == user_speech.user_id:
+            self.conversations[channel_id][-1].content += " " + user_speech.content
+        else:
+            self.conversations[channel_id].append(user_speech)
+
+    # returns a string representation of the conversations 
+    # in the form of:
+    # name: content
+    # name: content
+    def dump_active_conversation(self, channel_id: int):
+        return "\n".join(f"{speech.user_name}: {speech.content}" for speech in self.conversations.get(channel_id, []))
+    
+    def clear_active_conversation(self, channel_id: int):
+        if channel_id in self.conversations:
+            self.conversations[channel_id] = []
+
+conversations = ActiveConversations()
+
 @client.tree.command(name="join", description="Join the voice channel you are in")
 async def join(ctx: discord.Interaction):
     guild_id = ctx.guild_id
@@ -227,85 +266,96 @@ async def join(ctx: discord.Interaction):
     
     oaiClient = OAI(api_key=config.openai_api_key)
 
-    def text_callback(user: discord.User, output: str):
-        log.info(f'{user} said {output}')
+    # check if the current channel is voice channel
+    currentVoiceChannel = ctx.channel
+    if not isinstance(currentVoiceChannel, discord.VoiceChannel):
+        await ctx.response.send_message("This command can only be used in a voice channel.")
+        return
 
-        if not output.lower().startswith("hey there"):
+    def text_callback(user: discord.Member | discord.User, output: str):
+        conversations.add_user_speech(currentVoiceChannel.id, SpeechText(user_id=user.id, user_name=user.name, content=output))
+        ongoing_convo = conversations.dump_active_conversation(currentVoiceChannel.id)
+
+        log.info(f'{user} said {output}')
+        log.info(f"ongoing conversation: {ongoing_convo}")
+        if "jesus" not in output.lower():
             return
     
-        conn = psycopg2.connect(os.getenv('DATABASE_DSN'))
-        
-        # rolling window of up to 100 last messages until max context of 10000 characters.
-        cursor = conn.cursor()
-        cursor.execute("SELECT messages FROM discord_ai_user_conversation WHERE guild_id = %s AND channel_id = %s", (ctx.guild_id, ctx.channel_id))
-        rows = cursor.fetchall()
-        # read the json messages
-        if rows:
-            messages = rows[0][0]
-            # Add the new message to the list of messages
-            messages.append({
-                "author": user.name,
-                "bot": False,
-                "content": output,
-            })
+        session = SessionLocal()
+        try:
+            # Query the existing conversation
+            conversation = session.query(DiscordAIUserConversation).filter_by(
+                guild_id=ctx.guild_id, channel_id=ctx.channel_id).first()
 
-            # Ensure we don't exceed 100 messages or 100k characters total
-            total_chars = sum(len(m["content"]) for m in messages)
-            while len(messages) > 100 or total_chars > 100000:
-                removed_message = messages.pop(0)
-                total_chars -= len(removed_message["content"])
+            if conversation:
+                # Parse the existing messages, append the new one, and trim if necessary
+                messages = conversation.messages
+                messages_list = json.loads(json.dumps(messages))
+                messages_list.append({"author": user.name, "bot": False, "content": output})
+                total_chars = sum(len(m["content"]) for m in messages_list)
+                
+                conversation.messages = messages_list
 
-            # Update the database with the new list of messages
-            cursor.execute("UPDATE discord_ai_user_conversation SET messages = %s WHERE guild_id = %s AND channel_id = %s", 
-                        (json.dumps(messages), ctx.guild_id, ctx.channel_id))
-            
-            conn.commit()
-        else:
-            # create a new list of messages
-            messages = [{
-                "author": user.name,
-                "bot": False,
-                "content": output
-            }]
+                while len(messages_list) > 100 or total_chars > 100000:
+                    removed_message = messages.pop(0)
+                    total_chars -= len(removed_message["content"])
+                
+                messages = messages_list
+                # update the conversation object
+                session.merge(conversation)
+            else:
+                # Create a new conversation record
+                conversation = DiscordAIUserConversation(
+                    guild_id=ctx.guild_id,
+                    channel_id=ctx.channel_id,
+                    conversation_start_date=datetime.now().isoformat(),
+                    messages=[{"author": user.name, "bot": False, "content": output}]
+                )
+                messages = conversation.messages
+                session.add(conversation)
 
-            from datetime import datetime
-
-            cursor.execute("INSERT INTO discord_ai_user_conversation (guild_id, channel_id, conversation_start_date, messages) VALUES (%s, %s, %s, %s)", 
-                        (ctx.guild_id, ctx.channel_id, datetime.now().isoformat(), json.dumps(messages)))
-            conn.commit()
-
+            # Commit the changes
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+    
         message_history: list[ChatCompletionMessageParam] = [
-            {"role": "system", "content": "You are a helpful assistant in a discord channel. Answer concisely."},
+            {"role": "system", "content": "Your name is Jesus. You are a helpful assistant in a discord channel. Answer concisely."},
         ]
-
+        
         for m in messages:
-            if m["bot"]:
+            if m.get('bot', False) == True:
                 message_history.append(ChatCompletionAssistantMessageParam(role="assistant", content=m.get("content", "")))
             else:
-                message_history.append(ChatCompletionUserMessageParam(role="user", content=f'{m["author"]}: {m["content"]}'))
+                message_history.append(ChatCompletionUserMessageParam(role="user", content=f'{m.get("author", "someone")}: {m.get("content", "something")}'))
 
         response = oaiClient.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=message_history+[
-                {"role": "user", "content": output}
-            ],
+            messages=message_history
         )
 
         log.info(f'ai response: {response.choices[0].message.content or ""}')
 
         aiResponse = response.choices[0].message.content or ""
-
-        messages.append({
+        
+        new_message = {
             "author": "assistant",
             "bot": True,
             "content": aiResponse,
-        })
+        }
 
-        # save message to db
-        cursor.execute("UPDATE discord_ai_user_conversation SET messages = %s WHERE guild_id = %s AND channel_id = %s", 
-                        (json.dumps(messages), ctx.guild_id, ctx.channel_id))
-        conn.commit()
-        conn.close()
+        # Load the current messages, append the new message, then reassign back to the conversation
+        current_messages = conversation.messages
+        current_messages.append(new_message)
+        conversation.messages = current_messages
+
+        # Now SQLAlchemy will recognize the change and update the database when you commit the session
+        session.commit()
+        session.close()
+
+        # clear the active conversation
+        conversations.clear_active_conversation(currentVoiceChannel.id)
 
         asource = BytesIO()
         if aiResponse is not None:
@@ -331,7 +381,7 @@ async def join(ctx: discord.Interaction):
         audio_source = discord.FFmpegPCMAudio(source=asource, pipe=True)
         vc.play(audio_source)
 
-    def cb(recognizer: sr.Recognizer, audio: sr.AudioData, user: Optional[discord.User]) -> Optional[str]:
+    def cb(recognizer: sr.Recognizer, audio: sr.AudioData, user: Optional[discord.User | discord.Member]) -> Optional[str]:
         # log.debug("Got %s, %s, %s", audio, audio.sample_rate, audio.sample_width)
         # check audio length before sending it to whisper. make sure it's more than 100ms
         duration_ms = (len(audio.frame_data) / (audio.sample_rate * audio.sample_width)) * 1000
@@ -347,13 +397,7 @@ async def join(ctx: discord.Interaction):
             # self._debug_audio_chunk(audio)
         return text
 
-    sink = extras.SpeechRecognitionSink(process_cb=cb, text_cb=text_callback) #type: ignore
-
-    # check if the current channel is voice channel
-    currentVoiceChannel = ctx.channel
-    if not isinstance(currentVoiceChannel, discord.VoiceChannel):
-        await ctx.response.send_message("This command can only be used in a voice channel.")
-        return
+    sink = extras.SpeechRecognitionSink(process_cb=cb, text_cb=text_callback, phrase_time_limit=20)
 
     vc = await currentVoiceChannel.connect(cls=voice_recv.VoiceRecvClient)
     vc.listen(sink)
