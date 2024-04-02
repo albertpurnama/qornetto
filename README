@@ -5,7 +5,7 @@ Is a discord bot that ocassionally joins in the conversation on Discord.
 To run:
 
 ```bash
-python main.py
+python bot/main.py
 ```
 
 

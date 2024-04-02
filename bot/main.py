@@ -45,7 +45,7 @@ class FixedUpstashRedisEntityStore(UpstashRedisEntityStore):
 
 entity_store = FixedUpstashRedisEntityStore(
     session_id="my-session",
-    url="https://enabling-anemone-37187.upstash.io",
+    url=os.getenv("UPSTASH_REDIS_URL", "invalid_redis_url"),
     token=os.getenv("UPSTASH_REDIS_TOKEN", "invalid-upstash-redis-token"),
     ttl=None,
 )
@@ -348,11 +348,6 @@ async def join(ctx: discord.Interaction):
     
     oaiClient = OAI(api_key=config.openai_api_key)
 
-    message_history: list[ChatCompletionMessageParam] = [
-        {"role": "system", "content": "You are a helpful assistant in a discord channel. Answer concisely."},
-    ]
-
-
     def text_callback(user: discord.User, output: str):
         log.info(f'{user} said {output}')
 
@@ -412,7 +407,7 @@ async def join(ctx: discord.Interaction):
 
         response = oaiClient.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=message_history + [
+            messages=message_history+[
                 {"role": "user", "content": output}
             ],
         )
@@ -448,7 +443,8 @@ async def join(ctx: discord.Interaction):
 
             for chunk in s:
                 # save it to file
-                asource.write(chunk)
+                if isinstance(chunk, bytes):
+                    asource.write(chunk)
 
         # send sample audio to voice channel
         asource.seek(0)
@@ -466,7 +462,7 @@ async def join(ctx: discord.Interaction):
         text: Optional[str] = None
         try:
             func = getattr(recognizer, 'recognize_whisper_api')
-            text = func(audio, api_key=config.openai_api_key)  # type: ignore
+            text = func(audio, api_key=config.openai_api_key)
         except sr.UnknownValueError:
             pass
             # self._debug_audio_chunk(audio)
@@ -492,7 +488,10 @@ from upstash_redis import Redis
 import json
 from ui.key_setup import KeySetup
 
-redis = Redis(url="https://usw1-perfect-phoenix-34606.upstash.io", token=os.getenv("UPSTASH_REDIS_GUILD_CONFIG_TOKEN", "invalid-upstash-redis-token"))
+redis = Redis(
+    url=os.getenv("UPSTASH_REDIS_GUILD_CONFIG_URL", "invalid-redis-url"), 
+    token=os.getenv("UPSTASH_REDIS_GUILD_CONFIG_TOKEN", "invalid-upstash-redis-token"),
+)
 
 @client.tree.command()
 async def verify_setup(ctx: discord.Interaction):
