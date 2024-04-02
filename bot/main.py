@@ -302,7 +302,7 @@ from io import BytesIO
 from openai import OpenAI as OAI
 import speech_recognition as sr
 import logging
-from config.config import ServerBotConfig
+from models.config import ServerBotConfig
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -486,7 +486,7 @@ async def join(ctx: discord.Interaction):
 # connect to upstash redis
 from upstash_redis import Redis
 import json
-from ui.key_setup import KeySetup
+from views.key_setup import KeySetup
 
 redis = Redis(
     url=os.getenv("UPSTASH_REDIS_GUILD_CONFIG_URL", "invalid-redis-url"), 
