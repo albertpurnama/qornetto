@@ -1,7 +1,7 @@
 from sqlalchemy import Column, BIGINT, Integer, Index
 from sqlalchemy.schema import CheckConstraint
 from sqlalchemy.dialects import postgresql
-from ..db import Base
+from .base import Base
 
 class DiscordAIUserConversation(Base):
     __tablename__ = "discord_ai_user_conversation"

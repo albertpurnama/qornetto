@@ -72,6 +72,9 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 MY_GUILD=discord.Object(id=1162069309766508564)  # replace with your guild id
 
+from db import SessionLocal
+from models import DiscordAIUserConversation
+
 class MyClient(discord.Client):
     def __init__(self, *, intents: discord.Intents):
         super().__init__(intents=intents)
@@ -116,7 +119,6 @@ async def on_ready():
 
 import psycopg2
 
-
 @client.event
 async def on_message(message: discord.Message):
     # TODO: maybe use debug tool Jishaku instead of
@@ -140,44 +142,39 @@ async def on_message(message: discord.Message):
         # ignore messages not coming from the user.
         return
     
+    session = SessionLocal()
+    try:
+        # Query the existing conversation
+        conversation = session.query(DiscordAIUserConversation).filter_by(
+            guild_id=message.guild.id, channel_id=message.channel.id).first()
 
-    conn = psycopg2.connect(os.getenv('DATABASE_DSN'))
-    
-    # rolling window of up to 100 last messages until max context of 10000 characters.
-    cursor = conn.cursor()
-    cursor.execute("SELECT messages FROM discord_ai_user_conversation WHERE guild_id = %s AND channel_id = %s", (message.guild.id, message.channel.id))
-    rows = cursor.fetchall()
-    # read the json messages
-    if rows:
-        messages = rows[0][0]
-        # Add the new message to the list of messages
-        messages.append({
-            "author": message.author.name,
-            "bot": message.author.bot,
-            "content": message.content,
-        })
+        if conversation:
+            # Parse the existing messages, append the new one, and trim if necessary
+            messages = conversation.messages
+            messages_list = json.loads(json.dumps(messages))
+            messages_list.append({"author": message.author.name, "bot": False, "content": message.content})
+            total_chars = sum(len(m["content"]) for m in messages_list)
+            while len(messages_list) > 100 or total_chars > 100000:
+                removed_message = messages.pop(0)
+                total_chars -= len(removed_message["content"])
+            conversation.messages = messages_list
+            messages = messages_list
+        else:
+            # Create a new conversation record
+            conversation = DiscordAIUserConversation(
+                guild_id=message.guild.id,
+                channel_id=message.channel.id,
+                conversation_start_date=message.created_at.isoformat(),
+                messages=[{"author": message.author.name, "bot": False, "content": message.content}]
+            )
+            messages = conversation.messages
+            session.add(conversation)
 
-        # Ensure we don't exceed 100 messages or 100k characters total
-        total_chars = sum(len(m["content"]) for m in messages)
-        while len(messages) > 100 or total_chars > 100000:
-            removed_message = messages.pop(0)
-            total_chars -= len(removed_message["content"])
-
-        # Update the database with the new list of messages
-        cursor.execute("UPDATE discord_ai_user_conversation SET messages = %s WHERE guild_id = %s AND channel_id = %s", 
-                    (json.dumps(messages), message.guild.id, message.channel.id))
-        
-        conn.commit()
-    else:
-        # create a new list of messages
-        messages = [{
-            "author": message.author.name,
-            "bot": message.author.bot,
-            "content": message.content
-        }]
-        cursor.execute("INSERT INTO discord_ai_user_conversation (guild_id, channel_id, conversation_start_date, messages) VALUES (%s, %s, %s, %s)", 
-                       (message.guild.id, message.channel.id, message.created_at.isoformat(), json.dumps(messages)))
-        conn.commit()
+        # Commit the changes
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise e
     
     # now that we have the messages, let's create OpenAI 
     # conversation messages from it.
@@ -189,10 +186,10 @@ async def on_message(message: discord.Message):
     ]
 
     for m in messages:
-        if m["bot"]:
+        if m.get('bot', False) == True:
             openai_conversation_messages.append(ChatCompletionAssistantMessageParam(role="assistant", content=m.get("content", "")))
         else:
-            openai_conversation_messages.append(ChatCompletionUserMessageParam(role="user", content=f'{m["author"]}: {m["content"]}'))
+            openai_conversation_messages.append(ChatCompletionUserMessageParam(role="user", content=f'{m.get("author", "someone")}: {m.get("content", "someone")}'))
 
     async with message.channel.typing():
         # pass in the messages to gpt-3.5 openai
@@ -215,17 +212,18 @@ async def on_message(message: discord.Message):
                 "content": generated_response,
             })
 
-            cursor.execute("UPDATE discord_ai_user_conversation SET messages = %s WHERE guild_id = %s AND channel_id = %s", 
-                        (json.dumps(messages), message.guild.id, message.channel.id))
+            session.query(DiscordAIUserConversation).filter(
+                DiscordAIUserConversation.guild_id == message.guild.id,
+                DiscordAIUserConversation.channel_id == message.channel.id
+            ).update({"messages": messages})
+            session.commit()
 
         except Exception as e:
             log.error(f"Failed to generate OpenAI conversation: {e}")
             await message.channel.send("Sorry, I couldn't generate a response. Please try again later.")
 
-        # cleanup
-        conn.commit()
-        cursor.close()
-    conn.close()
+    # cleanup
+    session.close()
 
 @app_commands.command(name="ask", description="Ask Nonuts to do something")
 @app_commands.describe(message="Your question for Nonut")
