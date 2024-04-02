@@ -8,5 +8,10 @@ To run:
 python bot/main.py
 ```
 
+## DB Migration
+
+`alembic revision --autogenerate -m "Initial migration"` to generate a migration file.
+
+`alembic upgrade head` to apply the migration.
 
 ## Deployment
