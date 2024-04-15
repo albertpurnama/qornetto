@@ -65,7 +65,25 @@ async def on_ready():
     print(f'Logged in as {user} (ID: {user.id})')
     print('------')
 
-import psycopg2
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.prompts import ChatPromptTemplate
+
+tools = [TavilySearchResults(max_results=1)]
+
+prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You are a helpful assistant. Only use the tavily_search_results_json tool for up to date information.",
+        ),
+        ("placeholder", "{chat_history}"),
+        ("human", "{input}"),
+        ("placeholder", "{agent_scratchpad}"),
+    ]
+)
+
+from langchain.agents import AgentExecutor,create_tool_calling_agent
+from langchain_openai import ChatOpenAI
 
 @client.event
 async def on_message(message: discord.Message):
@@ -143,12 +161,16 @@ async def on_message(message: discord.Message):
         # pass in the messages to gpt-3.5 openai
         # Generate the OpenAI conversation
         try:
-            openaiClient = OAI(api_key=config.openai_api_key)
-            response = openaiClient.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=openai_conversation_messages,
-            )
-            generated_response = response.choices[0].message.content
+            llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+
+            # Construct the Tools agent
+            agent = create_tool_calling_agent(llm, tools, prompt)
+
+            agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+            resp = agent_executor.invoke({ "input": message.content, "chat_history": openai_conversation_messages[:-1] })
+
+            generated_response = resp.get("output")
 
             # Send the generated response back to the discord channel
             await message.channel.send(generated_response)
