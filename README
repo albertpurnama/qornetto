@@ -14,4 +14,8 @@ python bot/main.py
 
 `alembic upgrade head` to apply the migration.
 
+### DB Host
+
+Neon.tech under Albert's Github
+
 ## Deployment

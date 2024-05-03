@@ -100,7 +100,12 @@ async def on_message(message: discord.Message):
         # we're ignoring DMs for now.
         return
 
-    config = getConfigFromGuildId(message.guild.id)
+    user = client.user
+    if user is None:
+        await message.channel.send("Bot is not logged in properly")
+        return
+
+    config = getConfigFromGuildId(message.guild.id, user.id)
     if config is None:
         return
 
@@ -207,8 +212,8 @@ from models.config import ServerBotConfig
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-def getConfigFromGuildId(guild_id: int) -> ServerBotConfig | None:
-    config = redis.get(str(guild_id))
+def getConfigFromGuildId(guild_id: int, bot_id: int) -> ServerBotConfig | None:
+    config = redis.get(f"{str(guild_id)}-bot#{str(bot_id)}")
     if config is None:
         return ServerBotConfig.from_json({}) # return default config (using hosted OpenAI API key)
     return ServerBotConfig.from_json(json.loads(config))
@@ -276,7 +281,12 @@ async def join(ctx: discord.Interaction):
         await ctx.response.send_message("You need to be in a discord server to use the join functionality")
         return
     
-    config = getConfigFromGuildId(guild_id)
+    user = client.user
+    if user is None:
+        await ctx.response.send_message("Bot is not logged in properly")
+        return
+
+    config = getConfigFromGuildId(guild_id, user.id)
     if config is None:
         await ctx.response.send_message("Invalid configuration. You need to configure me using /setup command before using this command")
         return
@@ -446,7 +456,11 @@ async def verify_setup(ctx: discord.Interaction):
         await ctx.response.send_message("You need to be in a discord server to use the join functionality")
         return
     
-    config = getConfigFromGuildId(guild_id)
+    user = client.user
+    if user is None:
+        await ctx.response.send_message("Bot is not logged in properly")
+        return
+    config = getConfigFromGuildId(guild_id, user.id)
     if config is None:
         await ctx.response.send_message("Bot is not configured. You need to set it up using /setup command")
         return
@@ -461,7 +475,11 @@ async def setup(ctx: discord.Interaction):
 @commands.guild_only()
 async def listen(ctx: discord.Interaction):
     print(f"listen called by {ctx.user} in {ctx.guild_id}")
-    config = getConfigFromGuildId(ctx.guild_id or 0)
+    user = client.user
+    if user is None:
+        await ctx.response.send_message("Bot is not logged in properly")
+        return
+    config = getConfigFromGuildId(ctx.guild_id or 0, user.id)
     if config is None:
         await ctx.response.send_message("Invalid configuration. You need to configure me using /setup command before using this command")
         return
@@ -471,7 +489,7 @@ async def listen(ctx: discord.Interaction):
     config.on_message_channel_ids.append(str(ctx.channel_id))
 
     # save to redis
-    redis.set(str(ctx.guild_id), json.dumps(config.to_dict()))
+    redis.set(f"{str(ctx.guild_id)}-bot#{str(user.id)}", json.dumps(config.to_dict()))
 
     await ctx.response.send_message("Listening in this channel now")
 
